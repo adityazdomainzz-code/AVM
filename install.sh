@@ -42,11 +42,13 @@ command -v apt-get >/dev/null || die "AVM supports Debian 12/13 and Ubuntu 22.04
 
 # ---------------------------------------------------------------- host checks
 step "[1/8] Checking this machine"
-VIRT="$(systemd-detect-virt -c 2>/dev/null || echo none)"
+# "systemd-detect-virt -c" prints "none" AND exits 1 on non-containers, so only keep its first line
+VIRT="$(systemd-detect-virt -c 2>/dev/null | head -n1)"; VIRT="${VIRT:-none}"
 if [ -f /.dockerenv ] || grep -qa 'container=' /proc/1/environ 2>/dev/null || { [ -d /proc/vz ] && [ ! -d /proc/bc ]; } || [ "$VIRT" != none ]; then
   die "This is a container (${VIRT}). AVM needs a dedicated server or a KVM VPS - Docker, LXC and OpenVZ containers cannot run virtual machines."
 fi
-ok "Not a container ($(systemd-detect-virt 2>/dev/null || echo bare-metal))"
+HV="$(systemd-detect-virt 2>/dev/null | head -n1)"; [ -z "$HV" ] || [ "$HV" = none ] && HV=bare-metal
+ok "Not a container ($HV)"
 KVM=0
 if [ -e /dev/kvm ] || grep -Eq '(vmx|svm)' /proc/cpuinfo; then
   modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
