@@ -13,11 +13,13 @@ function run(args, opts = {}) {
       }
       resolve(stdout);
     });
-    if (opts.input !== undefined) { child.stdin.end(opts.input); }
+    // ALWAYS close stdin: `incus init/launch` read YAML config from stdin when it is not a
+    // terminal and would wait forever ("Downloading image…" that never finishes).
+    child.stdin.end(opts.input !== undefined ? opts.input : undefined);
   });
 }
 
-async function json(args) { return JSON.parse(await run(args)); }
+async function json(args, opts) { return JSON.parse(await run(args, opts)); }
 const query = (path) => json(['query', path]);
 
 // run a shell command inside the instance

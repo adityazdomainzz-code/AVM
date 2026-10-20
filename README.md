@@ -27,6 +27,15 @@ The installer checks the host, installs Incus (LXC + KVM), Node.js and pm2, sets
 ## GitHub / Discord login
 Admin → Settings: paste Client ID + Secret, copy the shown **callback URL** into the GitHub OAuth app / Discord application (OAuth2 → Redirects), then switch it on.
 
+## Docker (experimental)
+Runs Incus + node + panel in one **privileged** container. Only on a server where you control Docker (not Railway / shared container hosts).
+```bash
+git clone https://github.com/adityazdomainzz-code/AVM.git && cd AVM
+docker compose -f docker/docker-compose.yml up -d --build
+docker logs -f avm          # shows the admin password on first start
+```
+Uses host networking (panel on `8000`, VM ports `20000-30000`). Data lives in the `avm-data` and `avm-incus` volumes.
+
 ## Extra host
 `sudo bash install.sh --node-only` on the new server → copy the printed URL + token into Admin → Nodes → Add node.
 

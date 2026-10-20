@@ -378,6 +378,11 @@ app.patch('/api/admin/nodes/:nid', auth, admin, wrap(async (req, res) => {
   nodeFields(n, req.body); db.save();
   res.json({ ok: true });
 }));
+app.get('/api/admin/nodes/:nid/images', auth, admin, wrap(async (req, res) => {
+  const n = nodeById(req.params.nid);
+  if (!n) throw fail(404, 'Node not found');
+  res.json(await nodeReq(n, 'GET', '/api/images', undefined, { timeout: 150000 }));
+}));
 app.delete('/api/admin/nodes/:nid', auth, admin, wrap(async (req, res) => {
   if (D.vms.some((v) => v.nodeId === req.params.nid)) throw fail(400, 'Delete the VMs on this node first');
   D.nodes = D.nodes.filter((n) => n.id !== req.params.nid); db.save();

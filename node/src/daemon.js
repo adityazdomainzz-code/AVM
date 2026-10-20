@@ -90,6 +90,38 @@ app.get('/api/system', wrap(async (req, res) => {
   });
 }));
 
+// ---------- available OS images (live from the images: remote, cached 1h) ----------
+let imgCache = { at: 0, list: null, pending: null };
+async function fetchImages() {
+  const raw = await incus.json(['image', 'list', 'images:', '--format', 'json']);
+  const arch = { arm64: 'aarch64', x64: 'x86_64' }[process.arch] || 'x86_64';
+  const map = {};
+  for (const im of raw) {
+    if (im.architecture !== arch) continue;
+    const p = im.properties || {};
+    if (p.variant && p.variant !== 'default' && p.variant !== 'cloud') continue;
+    const names = (im.aliases || []).map((a) => a.name).filter((n) => n.split('/').length === 2);
+    if (!names.length) continue;
+    // prefer the numeric alias (ubuntu/24.04 over ubuntu/noble)
+    names.sort((a, b) => (/\/\d/.test(b) - /\/\d/.test(a)) || a.length - b.length);
+    const alias = names[0];
+    const [os, version] = alias.split('/');
+    const e = map[alias] || (map[alias] = { id: 'images:' + alias, os, name: p.os || os, version, release: p.release || '', container: false, vm: false });
+    if (im.type === 'virtual-machine') e.vm = true; else e.container = true;
+  }
+  // newest numeric version first, rolling names (edge, current, sid…) last
+  const num = (v) => /^\d/.test(v);
+  return Object.values(map).sort((a, b) => a.os.localeCompare(b.os) || (num(b.version) - num(a.version)) || b.version.localeCompare(a.version, undefined, { numeric: true }));
+}
+app.get('/api/images', wrap(async (req, res) => {
+  if (!imgCache.list || Date.now() - imgCache.at > 3600e3) {
+    imgCache.pending = imgCache.pending || fetchImages().finally(() => { imgCache.pending = null; });
+    try { imgCache.list = await imgCache.pending; imgCache.at = Date.now(); }
+    catch (e) { if (!imgCache.list) throw err(502, 'Could not reach the image server: ' + e.message); }
+  }
+  res.json(imgCache.list);
+}));
+
 // ---------- create ----------
 app.post('/api/vms', wrap(async (req, res) => {
   const { name, type, image, cpu, memory, disk } = req.body;
@@ -109,10 +141,18 @@ async function buildVm(name) {
   const v = S.vms[name];
   runtime[name] = { installing: true, error: null, step: 'Downloading image ' + v.image };
   try {
-    const args = ['init', v.image, name, '-c', `limits.cpu=${v.cpu}`, '-c', `limits.memory=${v.memory}MiB`, '-d', `root,size=${v.disk}GiB`];
+    const args = ['init', v.image, name, '-c', `limits.cpu=${v.cpu}`, '-c', `limits.memory=${v.memory}MiB`];
     if (v.type === 'vm') args.push('--vm');
     else args.push('-c', 'security.nesting=true');
-    await incus.run(args, { timeout: 30 * 60000 });
+    try { await incus.run([...args, '-d', `root,size=${v.disk}GiB`], { timeout: 30 * 60000 }); }
+    catch (e) {
+      // "dir" storage pools without project quotas cannot limit container disk size -> create without the limit
+      if (v.type === 'vm' || !/quota|size/i.test(e.message)) throw e;
+      console.warn('[avm-node] disk size limit not supported by this storage pool, creating', name, 'without it');
+      await incus.run(['delete', name, '--force']).catch(() => {});
+      runtime[name].step = 'Downloading image ' + v.image + ' (no disk quota on this pool)';
+      await incus.run(args, { timeout: 30 * 60000 });
+    }
     runtime[name].step = 'Configuring network';
     try { await incus.run(['config', 'device', 'override', name, 'eth0', `ipv4.address=${v.privateIp}`]); }
     catch { await incus.run(['config', 'device', 'set', name, 'eth0', `ipv4.address=${v.privateIp}`]); }
@@ -197,14 +237,14 @@ app.post('/api/vms/:name/sshx', wrap(async (req, res) => {
   const st = await incus.query(`/1.0/instances/${name}/state`).catch(() => null);
   if (!st || String(st.status).toLowerCase() !== 'running') throw err(409, 'Start the VM first');
   const readLink = async () => {
-    const out = await incus.exec(name, 'cat /tmp/avm-sshx.log 2>/dev/null; echo; (pgrep -f "sshx" >/dev/null && echo AVM_RUNNING) || true', [], { timeout: 10000 }).catch(() => '');
+    const out = await incus.exec(name, 'cat /tmp/avm-sshx.log 2>/dev/null; echo; (pgrep -x sshx >/dev/null && echo AVM_RUNNING) || true', [], { timeout: 10000 }).catch(() => '');
     const clean = out.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
     const m = /https:\/\/sshx\.io\/s\/[^\s"']+/.exec(clean);
     return { url: m ? m[0] : null, running: clean.includes('AVM_RUNNING'), log: clean };
   };
   if (!req.body.fresh) { const cur = await readLink(); if (cur.url && cur.running) return res.json({ url: cur.url, reused: true }); }
   const script = `
-pkill -f "sshx" 2>/dev/null; rm -f /tmp/avm-sshx.log
+pkill -x sshx 2>/dev/null; rm -f /tmp/avm-sshx.log
 if ! command -v curl >/dev/null 2>&1; then
   (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates) >/dev/null 2>&1 \
   || apk add --no-cache curl >/dev/null 2>&1 || dnf install -y -q curl >/dev/null 2>&1 || yum install -y -q curl >/dev/null 2>&1 || pacman -Sy --noconfirm curl >/dev/null 2>&1

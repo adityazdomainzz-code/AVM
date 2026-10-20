@@ -49,17 +49,22 @@ const GH = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a12 12 0
 const DC = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.3 4.4A19.8 19.8 0 0015.4 3l-.6 1.3a18.4 18.4 0 00-5.6 0L8.6 3a19.7 19.7 0 00-4.9 1.4C.6 9 -.3 13.5.1 18a19.9 19.9 0 006 3l1.3-2.1a12.9 12.9 0 01-2-1l.5-.4a14.2 14.2 0 0012.2 0l.5.4c-.6.4-1.3.7-2 1l1.3 2.1a19.8 19.8 0 006-3c.5-5.2-.8-9.7-3.6-13.6zM8 15.3c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4zm8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4z"/></svg>';
 const MARK = '<svg viewBox="0 0 64 64"><defs><linearGradient id="mk" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9fe6f5"/><stop offset="1" stop-color="#0a6a86"/></linearGradient></defs><path d="M32 4 56 18v28L32 60 8 46V18z" fill="url(#mk)"/><path d="M32 16v32M18 24l28 16M46 24 18 40" stroke="#fff" stroke-width="4" stroke-linecap="round"/></svg>';
 
-const IMAGES = [
-  { id: 'images:ubuntu/24.04', name: 'Ubuntu', ver: '24.04 LTS', c: '#e95420' },
-  { id: 'images:ubuntu/22.04', name: 'Ubuntu', ver: '22.04 LTS', c: '#e95420' },
-  { id: 'images:debian/12', name: 'Debian', ver: '12 Bookworm', c: '#a80030' },
-  { id: 'images:debian/13', name: 'Debian', ver: '13 Trixie', c: '#a80030' },
-  { id: 'images:alpine/3.20', name: 'Alpine', ver: '3.20', c: '#0d597f' },
-  { id: 'images:rockylinux/9', name: 'Rocky Linux', ver: '9', c: '#10b981' },
-  { id: 'images:almalinux/9', name: 'AlmaLinux', ver: '9', c: '#0f4266' },
-  { id: 'images:archlinux', name: 'Arch Linux', ver: 'rolling', c: '#1793d1' },
-];
-const osOf = (img) => IMAGES.find((i) => i.id === img) || { name: (img || '?').split(/[:/]/)[1] || img, ver: '', c: '#0a6a86' };
+// OS families shown first in the picker (versions come live from the node's image server)
+const OS_META = {
+  ubuntu: { name: 'Ubuntu', c: '#e95420' }, debian: { name: 'Debian', c: '#a80030' }, alpine: { name: 'Alpine', c: '#0d597f' },
+  rockylinux: { name: 'Rocky Linux', c: '#10b981' }, almalinux: { name: 'AlmaLinux', c: '#0f4266' }, archlinux: { name: 'Arch Linux', c: '#1793d1' },
+  fedora: { name: 'Fedora', c: '#294172' }, centos: { name: 'CentOS', c: '#932279' }, opensuse: { name: 'openSUSE', c: '#73ba25' },
+  kali: { name: 'Kali', c: '#367bf0' }, devuan: { name: 'Devuan', c: '#4a4a6a' }, oracle: { name: 'Oracle Linux', c: '#c74634' },
+  amazonlinux: { name: 'Amazon Linux', c: '#ff9900' }, gentoo: { name: 'Gentoo', c: '#54487a' }, nixos: { name: 'NixOS', c: '#5277c3' }, voidlinux: { name: 'Void', c: '#478061' },
+};
+const OS_ORDER = ['ubuntu', 'debian', 'alpine', 'rockylinux', 'almalinux', 'archlinux', 'fedora'];
+const UBUNTU_LTS = /^(\d\d)\.04$/;
+function osOf(img) {
+  const [os, ver] = String(img || '').replace(/^[^:]*:/, '').split('/');
+  const m = OS_META[os] || { name: os ? os[0].toUpperCase() + os.slice(1) : '?', c: '#0a6a86' };
+  const lts = os === 'ubuntu' && UBUNTU_LTS.test(ver || '') && +ver.slice(0, 2) % 2 === 0;
+  return { name: m.name, ver: (ver || '') + (lts ? ' LTS' : ''), c: m.c };
+}
 const typeLabel = (t) => (t === 'vm' ? 'KVM' : 'LXC');
 
 // ---------- api / ui helpers ----------
@@ -123,6 +128,7 @@ function applyBranding() {
   document.title = s.panelName || 'AVM Panel';
   if (s.logo) { const f = $('#favicon'); if (f) f.href = s.logo; }
   const bg = $('#bg');
+  document.body.classList.toggle('has-bg', !!s.background);
   const want = s.background ? `${s.backgroundType}:${s.background}` : '';
   if (bg.dataset.cur !== want) {
     bg.dataset.cur = want;
@@ -383,7 +389,10 @@ async function tabConsole(v, t, vm) {
   const offline = (st) => {
     if (mode === 'off') return; mode = 'off'; teardown();
     const creating = st && st.state === 'installing';
-    shell(`<div class="term-off"><div>${icon(creating ? 'snow' : 'terminal')}<h3 style="margin:10px 0 4px;color:#fff">${creating ? 'Creating your machine…' : 'Machine is not running'}</h3><p style="margin:0 0 16px;opacity:.8">${creating ? esc(st.step || 'Please wait') : 'Start it to open the console.'}</p>${creating ? '' : `<button class="btn ok" id="t-start" ${v.suspended && !state.me.admin ? 'disabled' : ''}>${icon('play')}Start</button>`}</div></div>`);
+    const failed = st && st.state === 'missing';
+    const title = creating ? 'Creating your machine…' : failed ? 'This machine could not be created' : 'Machine is not running';
+    const text = creating ? esc(st.step || 'Please wait') : failed ? esc(st.error || 'Unknown error') + (state.me.admin ? '<br><span style="opacity:.7">Delete it in Admin → Virtual machines and create it again with another OS version.</span>' : '<br><span style="opacity:.7">Please contact an administrator.</span>') : 'Start it to open the console.';
+    shell(`<div class="term-off"><div>${icon(creating ? 'snow' : 'terminal')}<h3 style="margin:10px 0 4px;color:#fff">${title}</h3><p style="margin:0 0 16px;opacity:.85;max-width:560px">${text}</p>${creating || failed ? '' : `<button class="btn ok" id="t-start" ${v.suspended && !state.me.admin ? 'disabled' : ''}>${icon('play')}Start</button>`}</div></div>`);
     const b = $('#t-start'); if (b) b.onclick = () => act(b, () => api('POST', `/api/vms/${v.id}/power`, { action: 'start' }), 'Starting…').then(() => setTimeout(vm.poll, 1500)).catch(() => {});
   };
   const online = async () => {
@@ -432,7 +441,13 @@ async function tabFiles(v, t, vm) {
     tb.innerHTML = '<tr><td colspan="4" class="muted">Loading…</td></tr>';
     let files;
     try { files = await api('GET', `/api/vms/${v.id}/files?path=${encodeURIComponent(cwd)}`); }
-    catch (e) { tb.innerHTML = `<tr><td colspan="4"><div class="alert warn" style="margin:0">${esc(/not running|instance is not/i.test(e.message) ? 'Start the machine to browse its files.' : e.message)}</div></td></tr>`; return; }
+    catch (e) {
+      const st = vm.st || {};
+      const msg = st.state === 'installing' ? 'The machine is still being created - files will appear when it is ready.'
+        : st.state === 'missing' ? 'This machine could not be created: ' + (st.error || e.message)
+        : /not running|instance is not/i.test(e.message) ? 'Start the machine to browse its files.' : e.message;
+      tb.innerHTML = `<tr><td colspan="4"><div class="alert warn" style="margin:0">${esc(msg)}</div></td></tr>`; return;
+    }
     const up = cwd !== '/' ? `<tr class="file-row" data-up><td><div class="fname">${icon('arrowUp')}..</div></td><td></td><td></td><td></td></tr>` : '';
     tb.innerHTML = up + (files.length ? files.map((f) => `
       <tr class="file-row" data-name="${esc(f.name)}" data-dir="${f.dir ? 1 : ''}">
@@ -643,10 +658,10 @@ async function pageCreateVm() {
         <label class="f"><span>RAM (MB)</span><input class="input" type="number" name="memory" min="128" step="128" value="1024"></label>
         <label class="f"><span>Disk (GB)</span><input class="input" type="number" name="disk" min="1" value="10"></label></div>
       <div class="f-label">Operating system</div>
-      <div class="pick-grid" id="oses">${IMAGES.map((i, k) => `<button type="button" class="pick ${k === 0 ? 'sel' : ''}" data-img="${i.id}"><div class="os"><i style="background:${i.c}">${i.name[0]}</i><div><b>${i.name}</b><span>${i.ver}</span></div></div></button>`).join('')}
-        <button type="button" class="pick" data-img="custom"><div class="os"><i style="background:#5d8795">+</i><div><b>Custom</b><span>any Incus image</span></div></div></button></div>
-      <input type="hidden" name="image" value="${IMAGES[0].id}">
-      <label class="f" id="custom-img" style="display:none;margin-top:12px"><span>Image alias</span><input class="input mono" id="img-in" placeholder="images:fedora/40"></label>
+      <div class="pick-grid" id="oses"><div class="muted" style="grid-column:1/-1"><span class="spinner sm" style="display:inline-block;vertical-align:middle;margin-right:8px"></span>Loading available images…</div></div>
+      <label class="f" id="ver-wrap" style="display:none;margin-top:12px"><span>Version</span><select class="input" id="ver"></select></label>
+      <input type="hidden" name="image" value="">
+      <label class="f" id="custom-img" style="display:none;margin-top:12px"><span>Image alias</span><input class="input mono" id="img-in" placeholder="images:fedora/42"><small>Run <span class="mono">incus image list images:</span> on the node to see every alias.</small></label>
       <button class="btn lg block" style="margin-top:16px">${icon('plus')}Create machine</button>
     </div></div></form>`;
   const f = $('#cv');
@@ -660,18 +675,51 @@ async function pageCreateVm() {
     const free = (n ? n.ipPool : []).filter((p) => !p.vm);
     $('[name=publicIp]', f).innerHTML = '<option value="">None - NAT (shared IP)</option>' + free.map((p) => `<option>${esc(p.ip)}</option>`).join('');
   };
-  $$('[data-type]', f).forEach((b) => (b.onclick = () => { $$('[data-type]', f).forEach((x) => x.classList.remove('sel')); b.classList.add('sel'); $('[name=type]', f).value = b.dataset.type; }));
-  $$('[data-img]', f).forEach((b) => (b.onclick = () => {
-    $$('[data-img]', f).forEach((x) => x.classList.remove('sel')); b.classList.add('sel');
-    const custom = b.dataset.img === 'custom';
+  // ---- live OS image picker ----
+  const imgCache = {};
+  let family = null;
+  const imgInput = $('[name=image]', f), verSel = $('#ver'), oses = $('#oses');
+  const curType = () => $('[name=type]', f).value;
+  const usable = () => (imgCache[nodeSel.value] || []).filter((i) => (curType() === 'vm' ? i.vm : i.container));
+  const pickFamily = (fam) => {
+    family = fam;
+    $$('[data-fam]', oses).forEach((x) => x.classList.toggle('sel', x.dataset.fam === fam));
+    const custom = fam === 'custom';
     $('#custom-img').style.display = custom ? 'block' : 'none';
-    $('[name=image]', f).value = custom ? $('#img-in').value : b.dataset.img;
-    if (custom) $('#img-in').focus();
-  }));
-  $('#img-in').oninput = (e) => { $('[name=image]', f).value = e.target.value.trim(); };
-  nodeSel.onchange = syncNode; syncNode();
+    $('#ver-wrap').style.display = custom ? 'none' : 'block';
+    if (custom) { imgInput.value = $('#img-in').value.trim(); $('#img-in').focus(); return; }
+    const vers = usable().filter((i) => (fam === 'other' ? !OS_ORDER.includes(i.os) : i.os === fam));
+    verSel.innerHTML = vers.map((i) => `<option value="${esc(i.id)}">${fam === 'other' ? esc(osOf(i.id).name) + ' ' : ''}${esc(osOf(i.id).ver)}${i.release && i.release !== i.version ? ' (' + esc(i.release) + ')' : ''}</option>`).join('');
+    imgInput.value = verSel.value || '';
+  };
+  const renderOses = () => {
+    const list = usable();
+    const fams = OS_ORDER.filter((o) => list.some((i) => i.os === o));
+    const others = list.some((i) => !OS_ORDER.includes(i.os));
+    const card = (fam, name, sub, color, letter) => `<button type="button" class="pick" data-fam="${fam}"><div class="os"><i style="background:${color}">${letter}</i><div><b>${esc(name)}</b><span>${esc(sub)}</span></div></div></button>`;
+    oses.innerHTML = fams.map((o) => { const n = list.filter((i) => i.os === o).length; return card(o, OS_META[o].name, `${n} version${n > 1 ? 's' : ''}`, OS_META[o].c, OS_META[o].name[0]); }).join('')
+      + (others ? card('other', 'More', 'other distros', '#2e6f82', '…') : '')
+      + card('custom', 'Custom', 'any Incus image', '#5d8795', '+');
+    $$('[data-fam]', oses).forEach((b) => (b.onclick = () => pickFamily(b.dataset.fam)));
+    pickFamily(fams.includes(family) || (family === 'other' && others) || family === 'custom' ? family : (fams[0] || 'custom'));
+  };
+  const loadImages = async () => {
+    const nid = nodeSel.value;
+    if (!imgCache[nid]) {
+      oses.innerHTML = '<div class="muted" style="grid-column:1/-1"><span class="spinner sm" style="display:inline-block;vertical-align:middle;margin-right:8px"></span>Loading available images…</div>';
+      try { imgCache[nid] = await api('GET', `/api/admin/nodes/${nid}/images`); }
+      catch (e) { imgCache[nid] = []; toast('Image list: ' + e.message); }
+    }
+    if (nodeSel.value === nid) renderOses();
+  };
+  verSel.onchange = () => { imgInput.value = verSel.value; };
+  $('#img-in').oninput = (e) => { imgInput.value = e.target.value.trim(); };
+  $$('[data-type]', f).forEach((b) => (b.onclick = () => { if (b.disabled) return; $$('[data-type]', f).forEach((x) => x.classList.remove('sel')); b.classList.add('sel'); $('[name=type]', f).value = b.dataset.type; if (imgCache[nodeSel.value]) renderOses(); }));
+  nodeSel.onchange = () => { syncNode(); loadImages(); };
+  syncNode(); loadImages();
   f.onsubmit = (e) => {
     e.preventDefault();
+    if (!imgInput.value) return toast('Choose an operating system');
     act($('.btn.lg', f), () => api('POST', '/api/admin/vms', formData(f)), 'Machine is being created - the first image download can take a few minutes')
       .then((v) => { if (v.warning) toast(v.warning); location.hash = `#/vm/${v.id}/console`; }).catch(() => {});
   };
